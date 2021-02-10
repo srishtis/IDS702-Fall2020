@@ -1,0 +1,274 @@
+---
+title: "Lab 4: Multilevel Logistic Regression"
+author: "Ashwini Marathe (asm105) & Srishti Saha (ss1078)"
+output: 
+  pdf_document
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(ggplot2)
+library(lme4)
+library(nlme)
+library(tidyverse)
+library(lmerTest)
+library(dplyr)
+library(lattice)
+library(sjPlot)
+```
+
+```{r echo=FALSE}
+# Read in the data
+Beauty <- read.table ("beauty.txt", header=T, sep=" ")
+#Beauty$beauty <- factor(Beauty$beauty)
+
+```
+
+## Exercise 1: Is the distribution of eval normal? If not, try the log transformation. Does that look more “normal”?
+
+```{r echo=FALSE}
+## go with eval as response variable
+#eval
+g1<-ggplot(Beauty,aes(eval)) +
+  geom_histogram(alpha=.8,fill=heat.colors(10),bins=10)
+#log eval
+g2<-ggplot(Beauty,aes(log(eval))) +
+  geom_histogram(alpha=.8,fill=cm.colors(10),bins=10)
+
+#sqrt eval
+g3<-ggplot(Beauty,aes((eval)**(1/2))) +
+  geom_histogram(alpha=.8,fill=rainbow(10),bins=10)
+
+#invers eval
+g4<-ggplot(Beauty,aes((1/eval))) +
+  geom_histogram(alpha=.8,fill=rainbow(10),bins=10)
+
+gridExtra::grid.arrange(g1, g2, g3,g4, ncol=2)
+```
+
+We tried 3 transformations on 'eval': log, square-root and inverse. Although 'eval' does not look normal, Log-transformation does not look any better. The distribution of 'eval' looks the most normal of the four options here. We will go ahead with 'eval'.
+
+## Exercise 2: Describe the overall relationship between eval and beauty. Also examine the same relationship by CourseID. Are there any courses for which the relationship looks potentially different than others?
+
+```{r echo=FALSE}
+ggplot(data=Beauty,aes(y=eval, x=beauty))+
+  geom_point()+
+  labs(title="Eval versus Beauty") +
+  geom_smooth(method = 'lm')
+
+newdata = Beauty %>% filter(courseID %in% c(0,4,5,17, 20, 21,22,23,9))
+
+ggplot(newdata,aes(y=eval, x=beauty)) +
+  geom_point(alpha = .5,colour="blue4") +
+  ggplot2::geom_smooth(method="lm",col="black") +
+  labs(title="Eval versus Beauty across different course IDs") +
+  facet_wrap(~as.factor(courseID))
+
+#cor(Beauty$eval,Beauty$beauty)
+```
+
+The relationship between eval and beauty seems positive and linear. Even if we split the data by course IDs and select courses with multiple data points, we see an upward trend between eval and beauty in most course IDs. 
+
+The trend of eval versus beauty is downward for courseID 9, 12 and 23. For others, it is either constant or upwards. This discrepancy might also be because of insufficient data in these courses.
+
+The correlation of beauty and eval is 0.19 which means that they have a low-moderate correlation.
+
+## Exercise 3: Is it meaningful to fit a model that includes random slopes for beauty by profnumber? Why or why not?
+
+It is not meaningful to fit a model that includes random slopes for beauty by profnumber. This is because beauty is a professor level variable and is constant for a given professor. Thus, it will add no information to the random slopes model at a professor level and will have a constant effect.
+
+## Exercise 4: Now, explore the relationship between eval and the other potential predictors, excluding profnumber, profevaluation, and CourseID. Don’t include any of the plots, just briefly describe the most interesting relationships. We should not include profevaluation as a predictor for eval. Why?
+
+```{r echo=FALSE, include=F}
+
+## numerical variables
+ggplot(data=Beauty,aes(y=eval, x=students))+
+  geom_point()+
+  geom_smooth(method = 'lm') #linear constant trend
+cor(Beauty$eval,Beauty$students) #-0.001229338
+
+ggplot(data=Beauty,aes(y=eval, x=age))+
+  geom_point()+
+  geom_smooth(method = 'lm') #linear slightly downward
+cor(Beauty$eval,Beauty$age) #-0.05169619
+
+ggplot(data=Beauty,aes(y=eval, x=didevaluation))+
+  geom_point()+
+  geom_smooth(method = 'lm')#linear slightly upward
+cor(Beauty$eval,Beauty$didevaluation) #0.03
+
+ggplot(data=Beauty,aes(y=eval, x=percentevaluating))+
+  geom_point()+
+  geom_smooth(method = 'lm')#linear upward
+cor(Beauty$eval,Beauty$percentevaluating) #0.22
+
+
+## factor variables
+ggplot(data = Beauty, aes(y=eval, x=as.factor(tenured))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') # no difference- very similar range
+ggplot(data = Beauty, aes(y=eval, x=as.factor(female))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') # female profs have lower median rating as compared to males
+ggplot(data = Beauty, aes(y=eval, x=as.factor(minority))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #professor from minority group has less median evaluation as compared to non-minority
+ggplot(data = Beauty, aes(y=eval, x=as.factor(formal))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #not a strong effect- median eval of formally dressed profs is higher than non-formal- however range is similar. 
+ggplot(data = Beauty, aes(y=eval, x=as.factor(lower))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #lower division courses have an overall better eval than the ones taking higher level courses
+ggplot(data = Beauty, aes(y=eval, x=as.factor(multipleclass))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #similar-no major difference
+ggplot(data = Beauty, aes(y=eval, x=as.factor(nonenglish))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #Professors who received an undergraduate education from a non-English speaking country have a lower overall rating than the professors who had undergrad training in English speaking countries
+ggplot(data = Beauty, aes(y=eval, x=as.factor(onecredit))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #significant difference- one-credit course are rated higher overall as compared to the ones who aren't
+ggplot(data = Beauty, aes(y=eval, x=as.factor(tenuretrack))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black') #profs who did not work on tenure track have a higher overall rating than tenure track professors
+
+
+## profeval and eval
+cor(Beauty$eval,Beauty$profevaluation)
+```
+#### Numerical variables: students, age, didevaluation, percentevaluating
+
+* The correlation of eval with the following variables is **very low** (absolute value<=0.05): students (linear trend-almost constant); age (linear trend- very slightly downward); didevaluation (linear trend-very slightly upward)
+* The correlation of eval with these variables is **moderate to high** (abs value>0.03): percentevaluating (linear trend-upward)
+
+#### Factor variables: tenured, female, minority, formal, lower, multipleclass, nonenglish, onecredit, tenuretrack
+
+* Factors that do not have a strong/significant impact: tenured, multiple class.
+* If the instructor dressed formally in the picture used for beauty ratings, (formal=1), the median value of eval is slightly higher than non-formal. (however range is similar.)
+* Female profs have lower median eval rating as compared to males
+* Professor from minority group has less median evaluation as compared to non-minority
+* Professors who received an undergraduate education from a non-English speaking country show a lower overall eval rating than the professors who had undergrad training in English speaking countries
+* One-credit courses are rated higher overall as compared to the ones who aren't.
+* Lower division courses have an overall better eval than the ones taking higher level courses
+* Profs who did not work on tenure track show a higher overall eval rating than tenure track professors
+
+We **should not include profevaluation as a predictor for eval** because of the high correlation between them. The correlation coefficient of profevaluation and eval is **0.94**. Furthermore, by definition profevaluation is the instructor rating and eval is course rating. So it is obvious that if the professor was evaluated high, students might have liked the subject as well.
+
+## Exercise 5: Fit a varying-intercept model for these data by profnumber with beauty as the only predictor. Interpret the results in the context of the question.
+
+```{r echo=FALSE}
+model_q5 = lmer(eval ~ beauty + (1 | profnumber), data = Beauty) 
+summary(model_q5)
+
+#confint(model_q5)
+#ranef(model_q5)
+#dotplot(ranef(model_q5, condVar=T))
+
+tab_m5<-tab_model(model_q5)
+```
+* Interpreting fixed effects: We have an overall "average" regression line for all courses across all professors which has slope of 0.116 and intercept 3.94. This means just for the fixed effects, the model looks like= $eval_i=3.94+0.12*beauty_i$. Thus, for any course, the baseline eval (course evaluation) value is 3.93. 
+  * Then, for any course for profnumber 1, every unit increase in the beauty score increases the eval (course evaluation) value by 0.12 (given all other factors are constant).
+* However, we also need to look at the random effects to see how this trend differs for every professor. For example, for profnumber=2, the intercept is -0.21. Thus, estimated regression line for profnumber 2 becomes: $eval_i=(3.94-0.21)+0.12*beauty_i= 3.73+0.12*beauty_i$
+* Interpreting random effects: The estimated standard error $\hat{\sigma}=0.41$ describes the unexplained variation in average ratings across professors. The estimated $\hat{\tau_0}=0.37$ describes the variation in ratings across the different course evaluations for the same instructor.
+
+## Exercise 6: Now identify three instructor-level predictors excluding beauty (with profnumber being the instructor-level identifier) that you think we should control for based on your EDA. Fit a varying-intercept model for these data by profnumber and include beauty plus the other three variables you have identified as predictors. Interpret the results in the context of the question.
+
+```{r echo=FALSE}
+model_q6 <- lmer(eval ~ beauty + as.factor(nonenglish) + as.factor(female) + as.factor(tenuretrack) + (1 | profnumber), data=Beauty)
+
+summary(model_q6)
+#confint(model_q6)
+#dotplot(ranef(model_q6, condVar=T))
+```
+
+We included 3 instructor level predictors: nonenglish, female and tenuretrack as they showed some trend and correlation during the EDA.
+
+* All three predictors were significant in their fixed effects (as they had p-value <=0.05). The most significant predictor was beauty based on its highest absolute t-value.
+* Intrepreting fixed effects:  We have an overall "average" regression line for all courses across all professors which has slope of 0.13 (for beauty), -0.31 (for nonenglish), -0.22 (for female) and -0.23 (for tenuretrack)  and intercept 4.24. This means just for the fixed effects, the model looks like= $eval_i=4.24+0.13*beauty_i-0.31*nonenglish_i-0.22*female_i-0.23*tenuretrack_i$. Thus, for any course, the baseline eval (course evaluation) value given it is taught by a male professor trained in english speaking country and working on a non-tenure track (nonenglish=0, female=0, tenuretrack=0),  is 4.24. 
+* Then, for any course for profnumber 1, every unit increase in the beauty score increases the eval (course evaluation) value by 0.13 (given all other factors are constant).
+* Then, for any course for profnumber 1, if it is an instructor who studied in a non-english speaking country, the eval score is reduced by -0.31 (given all other factors are constant).
+* Then, for any course for profnumber 1, if it is a female instructor, the eval score is reduced by -0.22(given all other factors are constant).
+* Then, for any course for profnumber 1, if it is a non-tenuretrack instructor, the eval score is reduced by -0.23(given all other factors are constant).
+* However, we also need to look at the random effects to see how this trend differs for every professor. For example, for profnumber=2, the intercept is -0.25. Thus, estimated regression line for profnumber 2 becomes: $eval_i=(4.24-0.25)+0.13*beauty_i-0.31*nonenglish_i-0.22*female_i-0.23*tenuretrack_i$
+* Interpreting random effects: The estimated standard error $\hat{\sigma}=0.41$ describes the unexplained variation in average ratings across professors. The estimated $\hat{\tau_0}=0.35$ describes the variation in ratings across the different course evaluations for the same instructor.
+
+## Exercise 7: Using the model from question 5, how does the variation in average ratings across professors compare to the variation in ratings across the different course evaluations for the same instructor?
+
+In model in question 5, the two values of estimated standard error and deviation: (0.37, 0.41) are fairly similar. Thus, the variation in average ratings across professors is very similar to the variation in ratings across the different course evaluations for the same instructor. This means that we are considering both the in-group information and the overall information in our model.
+
+## Exercise 8: Extend the model from question 6 by also allowing the intercept and coefficient for beauty to vary by CourseID. Fit the model in R and interpret the results: the coefficient estimates and the estimated standard deviations. Did any of the results for the fixed effects change? If yes, why do you think that is?
+
+```{r echo=FALSE}
+model_q8 = lmer(eval ~ beauty + as.factor(nonenglish) + as.factor(female) + as.factor(tenuretrack) + (1 | profnumber) +(beauty | courseID), data=Beauty)
+
+summary(model_q8)
+```
+
+Yes, in this model (as compared to model in Q6) the intercept, coefficients and the signifcance levels have changed. This is because some of the variance that was captured by these predictors is now accounted for after using courseID as a class level identifier. Also, a fraction of the variation in eval is now also explained by the random slope component.
+
+- Interpretation of fixed effects: 
+  + The intercept estimate dropped marginally from 4.245 to 4.239. The coefficients for beauty, nonenglish, female and tenuretrack have also changed marginally which basicqally implies that every level (/unit) change in these predictors will have a marginally different effect on the eval score.
+  + The significance of beauty has dropped (t-value from 2.64 to 1.92) and now the female predictor is the most significant (abs t-value 2.70)
+  + This happened because every course will now contribute to the varying intercept or the baseline eval score which will be also affected by other covariates to get to the actual evaluation score. 
+
+- Interpreting random effects:
+  + The random effects now include variation by beauty in groups defined by courseID.
+  + The estimated standard error 0.3910 describes the unexplained within-instructor and within-course variation.
+  + The estimated deviation 0.3421 describes the within-instructor variation attributed to the random intercept.
+  + The estimated deviation 0.2636 describes the within-course variation attributed to the random intercept.
+  + The estimated deviation 0.0599 describes the within-course variation attributed to the random slope due to the beauty predictor.
+  
+
+## Exercise 9: Using two or three (at most!) plots, tell a visual story about your most interesting or surprising findings. If you need to present results by profnumber or CourseID, you should consider either looking at a random sample of them or focusing on the groups that are the most different, since there are so many of them.
+
+```{r, echo=F}
+
+gridExtra::grid.arrange(ggplot(data=Beauty,aes(y=eval, x=beauty))+
+  geom_point()+
+  geom_smooth(method = 'lm'),
+ggplot(data = Beauty, aes(y=eval, x=as.factor(minority))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black'),
+ggplot(data = Beauty, aes(y=eval, x=as.factor(onecredit))) +
+    geom_boxplot(alpha = 0.5,
+                 width = 0.2,
+                 color = 'black'),layout_matrix = rbind(c(1,1,2),
+                                                        c(1,1,3)))
+```
+
+* Beauty becomes insignificant in model 8 (high p-value of 0.09). This is contradictory to what we observed in our EDA.
+* Minority seemed significant in the EDA (higher eval for minority=0 (non-minor groups)), but was insignificant (based on a high p-value) during model-selection
+* There is a huge disparity between the eval scores of one-credit and non-one credit courses. This might be because one-credit courses might have lighter coursework and hence are more likeable by students.
+
+## Exercise 10: Identify one class-level predictor (with CourseID being the class-level identifier) that you think we should control for in the model. Include it as a fixed predictor in the model from Question 8. Is the variable significant? If yes, interpret the coefficient.
+
+```{r echo=FALSE}
+model_q10 = lmer(eval ~ beauty + as.factor(nonenglish) + as.factor(female) + as.factor(tenuretrack) + as.factor(onecredit) + (1 | profnumber) +(beauty | courseID), data=Beauty)
+
+summary(model_q10)
+```
+
+We included onecredit as the class level predictor. The variable is significant according to its low p-value.
+
+* Fixed Effects:
+  + The baseline (intercept) changes to 4.17 (from 4.23). This means that the baseline eval score, given that it is taught by male professor trained in english-speaking country who is not a tenure track instructor and the course is a non-one credit course is 4.17
+  + The estimate is 0.35. This means that for a one credit course, the eval score increase by 0.35 (given all other factors are constant).
+  
+* Random Effects:
+  + The estimated standard error 0.3919 describes the unexplained within-instructor and within-course variation.
+  + The estimated 0.3311 describes the within-instructor variation attributed to the random intercept.
+  + The estimated 0.2355 describes the within-course variation attributed to the random intercept.
+
+

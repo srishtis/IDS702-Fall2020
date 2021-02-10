@@ -1,0 +1,264 @@
+---
+title: "Lab 2: Logistic Regression"
+output: 
+  pdf_document
+author: "Ashwini Marathe (asm105) & Srishti Saha (ss1078)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r echo=FALSE,include=FALSE}
+#importing packages
+library(ggplot2)
+library(dplyr)
+library(PerformanceAnalytics)
+library(regclass)
+library(caret)
+library(pROC)
+```
+
+```{r echo=FALSE}
+#reading csv
+nba <- read.csv("nba_games_stats.csv",header = TRUE,sep = ",",stringsAsFactors = FALSE)
+```
+
+
+```{r echo=FALSE}
+# Set factor variables
+nba$Home <- factor(nba$Home)
+nba$Team <- factor(nba$Team)
+nba$WINorLOSS <- factor(nba$WINorLOSS)
+
+# Convert date to the right format
+nba$Date <- as.Date(nba$Date, "%Y-%m-%d")
+
+# Also create a binary variable from WINorLOSS. 
+# This is not always necessary but can be useful for R functions that prefer numeric binary variables to the original factor variables
+nba$Win <- rep(0,nrow(nba))
+nba$Win[nba$WINorLOSS=="W"] <- 1
+#nba$Win <- as.factor(nba$Win)
+```
+
+```{r echo=FALSE, include=FALSE}
+team_wins_stats<-data.frame(nba %>%
+    group_by(Team, Win) %>%
+    summarise(sum(Win),metric1=sd(TeamPoints-OpponentPoints)) )
+
+team_wins_stats[order(team_wins_stats$metric1,decreasing = F),]
+#Let us select 'GSW'
+
+
+nba_reduced <- nba[nba$Team == "MEM", ]
+
+# Set aside the 2017/2018 season as your test data
+nba_reduced_train <- nba_reduced[nba_reduced$Date < "2017-10-01",]
+nba_reduced_test <- nba_reduced[nba_reduced$Date >= "2017-10-01",]
+
+#str(nba_reduced_train)
+```
+
+## Exercise 1: Exploratory plots for Win
+
+```{r echo=FALSE, include=FALSE}
+## Home, TeamPoints, FieldGoals., Assists, Steals, Blocks and Turnovers
+
+#plotting home versus Win
+ggplot(nba_reduced_train, aes(x=Win,fill=Home)) +
+  geom_histogram()
+```
+* From the histogram plotting **wins versus Home**, we see that the frequency of wins in Home state is greater than that in the matches played Away. We also see that the number of losses at Home are lesser than in matches played Away.
+```{r echo=FALSE, include=FALSE}
+#scatter plot
+ggplot(data = nba_reduced_train, aes(x = TeamPoints, y = Win)) + geom_point() +
+labs(y = "Wins") 
+```
+
+```{r echo=FALSE, include=FALSE}
+#Plotting box plot for birth weight for smoking and non-smoking mother
+boxplot(TeamPoints~Win, data=nba)
+```
+* From the boxplot of **Team points versus Wins and losses**, we see that the team score more points when it won as compared to when it lost.
+
+```{r echo=FALSE, include=FALSE}
+boxplot(FieldGoals.~Win, data=nba)
+```
+* The plot shows that the team has **higher number of average field goals in Wins than in losses**. The average percent of goals scored over attempted is over 45% for wins while it is lower for losses.
+```{r echo=FALSE,include=FALSE}
+boxplot(Turnovers~Win, data=nba)
+```
+
+* Although there is not much of a difference in the **average number of steals across wins and losses**, it is still higher in wins than in losses. The distribution of **number of blocks** follows a very similar pattern. The number of **assists** is also higher for wins than for losses.
+
+* The average number of turnovers is slightly lower in wins than in losses. However, this difference is not very significant.
+
+
+## Exercise 2: Correlations
+
+```{r echo=FALSE}
+chart.Correlation(nba_reduced_train[,c(8,10,13,16)], histogram = TRUE, pch = 19)
+
+```
+
+```{r echo=FALSE}
+chart.Correlation(nba_reduced_train[,c(19:20)], histogram = TRUE, pch = 19)
+```
+
+* We see high correlations between the following pairs:
+1. TeamPoints and FieldGoals
+2. TeamPoints and X3PointShots
+3. TeamPoints and FreeThrows
+Thus these variables should not be included in the model together.
+
+* We also see a high correlation between OffRebounds and TotalRebounds. Thus, both these variables should also not be included together.
+
+* By definition of the metrics, FieldGoals., FieldGoals and FieldGoalsAttempted also have high correlations. Hence, one of these metrics will be finally selected. A similar case has been observed for X3PointShots and FreeShots and their derived metrics.
+
+## Exercise 3: Model
+```{r echo=FALSE}
+model_nba<-glm(Win~Home+TeamPoints+FieldGoals.+Assists+Steals+Blocks+Turnovers,data=nba_reduced_train,family=binomial); 
+```
+
+```{r echo=FALSE}
+
+VIF(model_nba)
+```
+
+According to the VIF values, none of the variable-pairs seem to have a high correlation. Thus, we can safely eliminate the scope of multicollinearity.
+
+## Exercise 4: Model Output and Interpretation
+
+```{r echo=FALSE}
+summary(model_nba)
+```
+
+The model results can be interpreted in the following manner:
+
+* The model estimate for Home (level=Home) is 1.02 on the log-scale which converts to 2.77 on the exponential scale. This means that the odds for winning increases 2.77 times when the team plays at Home (as compared to Away matches).
+* According to the p-values (ones with low p-values), the significant variables are: Home, TeamPoints, FieldGoals. and Steals. 
+* The most significant variable is FieldGoals. (field goals scored as a percent of goals attempted) according to the absolute value of its t-value (it is the highest at 3.457)
+* The estimate of FieldGoals. on a log-scale is 15.08 which indicates that for an increase in the Field goals ratio by 0.1 (0<=FieldGoals.<=1), there will be a $e^{1.5}$ times increase in the odds of winning.
+* For the metric, TeamPoints, the estimate is 0.07 (on the log-scale) which implies that for every 1 point increase in team points, there will be an increase in the odds of winning by $e^{0.07}$ times (i.e. 1.07 times).
+* Similarly, for steals, increase in every 1 steal will lead to an increase of odds of winnng by 1.13 times.
+
+## Exercise 5: Predictions and Accuracy
+
+Let us look at the confusion matrix for in-sample prediction for the primary basic model with the following variables: Home,TeamPoints,FieldGoals.,Assists,Steals,Blocks,Turnovers
+
+```{r echo=FALSE}
+Conf_mat <- confusionMatrix(as.factor(ifelse(fitted(model_nba) >= 0.5, "W","L")), nba_reduced_train$WINorLOSS,positive = "W")
+Conf_mat
+```
+The accuracy of this model on the training dataset is 71.5%.
+
+```{r echo=FALSE}
+invisible(roc(nba_reduced_train$Win,fitted(model_nba),plot=T,legacy.axes=T, print.auc =T,col="red3"))
+```
+
+From the ROC curve, the AUC value is 0.833. 
+
+## Exercise 6: Improved Model
+
+```{r echo=FALSE}
+#model
+model_nba_imp<-glm(Win~Home+TeamPoints+FieldGoals.+Assists+Steals+Blocks+Turnovers+Opp.FieldGoals.,data=nba_reduced_train,family=binomial)
+summary(model_nba_imp)
+
+```
+
+On addition of the variable Opp.FieldGoals., it turns out to be relevant based on its low p-value. The absolute value of its t-stat is 6.59 (highest). Thus, it is the most significant variable.
+
+The estimate of FieldGoals. on a log-scale is -46.60 which indicates that for an increase in the Field goals ratio by 0.1 (0<=FieldGoals.<=1), there will be a $e^{4.6}$ times decrease in the odds of winning. (*This statistic may be up for investigation!*)
+
+## Exercise 7: Confusion Matrix and ROC of improved model
+
+Let us look at the confusion matrix for in-sample prediction for the improved model with the following variables: Home,TeamPoints,FieldGoals.,Assists,Steals,Blocks,Turnovers,Opp.FieldGoals.
+
+```{r echo=FALSE}
+# confusion matrix
+Conf_mat_1 <- confusionMatrix(as.factor(ifelse(fitted(model_nba_imp) >= 0.5, "W","L")), nba_reduced_train$WINorLOSS,positive = "W")
+Conf_mat_1
+
+# ROC
+invisible(roc(nba_reduced_train$Win,fitted(model_nba_imp),plot=T,legacy.axes=T, print.auc =T,col="red3"))
+```
+The accuracy of the improved model is 86.6%. The true-positive rate (sensitivity) of the model is 90% which indicates that of all the wins, the model can predict 90% of the cases. For the previous model, the sensitivity was 77.9%. Thus, the new improved model is predicting the odds of winning better.
+
+The AUC of the improved model is 0.939.
+
+## Exercise 8: Suggestions of Coach
+
+We have the following recommendations:
+
+1. Improve the percentage of field goals scored as a percent of the attempts. This would mean that the accuracy of the goals scored should increase.
+
+2. The average team scores (team points) should increase. This variable is highly significant while improving the odds of winning.
+
+3. Improve the defense such that the number of steals increase thus increasing the odds of winning.
+
+## Exercise 9: Out-of-sample predictions
+
+Let us look at the confusion matrix for out-of-sample prediction for the improved model with the following variables: Home,TeamPoints,FieldGoals.,Assists,Steals,Blocks,Turnovers,Opp.FieldGoals.
+
+```{r echo=FALSE}
+# predictions on test dataset
+predicted <- predict(model_nba_imp, nba_reduced_test, type="response")
+predicted_binary<-factor(ifelse(predicted>=0.5, 1, 0))
+# converting Win to factor
+nba_reduced_test$Win <- factor(nba_reduced_test$Win)
+
+# confusion matrix
+Conf_mat_2 <- confusionMatrix(predicted_binary, nba_reduced_test$Win,positive = "1")
+
+Conf_mat_2
+```
+
+The out-of-sample accuracy of this model is 78.05%. The model seems to perform well even for out-of-sample data (2017-2018).
+
+## Exercise 10: Change in Deviance Test
+
+Let us look at the confusion matrix for in-sample prediction for the improved model with the following variables: Home,TeamPoints,FieldGoals.,Assists,Steals,Blocks,Turnovers,Opp.FieldGoals,Opp.Assists,Opp.Blocks
+
+```{r echo=FALSE}
+# model with additional variables- Opp.Assists & Opp.Blocks
+model_nba_2<-glm(Win~Home+TeamPoints+FieldGoals.+Assists+Steals+Blocks+Turnovers+Opp.FieldGoals.+Opp.Assists+Opp.Blocks,data=nba_reduced_train,family=binomial)
+
+# confusion matrix on train data
+Conf_mat_m2 <- confusionMatrix(as.factor(ifelse(fitted(model_nba_2) >= 0.5, "W","L")), nba_reduced_train$WINorLOSS,positive = "W")
+Conf_mat_m2
+
+
+
+# change in deviance test
+anova(model_nba_imp, model_nba_2, test= "Chisq")
+
+# observing differences in ROCs
+invisible(roc(nba_reduced_train$Win,fitted(model_nba_imp),plot=T,legacy.axes=T, print.auc =F,col="red1"))
+invisible(roc(nba_reduced_train$Win,fitted(model_nba_2),plot=T,legacy.axes=T, print.auc =T,col="blue4", add=T))
+```
+
+According to the results of the change in deviance test, the p-value is very low. Given that the null-hypothesis is that the new model is equivalent to the previous model, we can reject the the same. Thus, the new model is better than the previous one. 
+
+### Addition of a new variable:
+We thought of adding the variable Opp.Turnovers to our existing model. This is because by definituion of the metric, if the number of times the ball was won back from the opponent (when they had the possession), this should increase the odds of winning.
+
+Let us look at the confusion matrix for in-sample prediction for the improved model with the following variables: Home, TeamPoints, FieldGoals., Assists, Steals, Blocks, Turnovers, Opp.FieldGoals, Opp.Assists, Opp.Blocks, Opp.Turnovers
+
+```{r echo=FALSE}
+# adding variable Opp.Turnovers
+model_nba_3<-glm(Win~Home+TeamPoints+FieldGoals.+Assists+Steals+Blocks+Turnovers+Opp.FieldGoals.+Opp.Assists+Opp.Blocks+Opp.Turnovers,data=nba_reduced_train,family=binomial)
+
+# confusion matrix on train data
+Conf_mat_3 <- confusionMatrix(as.factor(ifelse(fitted(model_nba_3) >= 0.5, "W","L")), nba_reduced_train$WINorLOSS,positive = "W")
+Conf_mat_3
+
+
+# Comparing with previous model
+anova(model_nba_2, model_nba_3, test= "Chisq")
+invisible(roc(nba_reduced_train$Win,fitted(model_nba_2),plot=T,legacy.axes=T, print.auc =F,col="red1"))
+invisible(roc(nba_reduced_train$Win,fitted(model_nba_3),plot=T,legacy.axes=T, print.auc =T,col="blue4", add=T))
+```
+With the improved model with the variable Opp.Turnovers, we see that this variable is significant owing to its low p-value and high t-statistic. 
+
+On comparing the in-sample accuracy of this model with the previous one, we see that the accuracy increased from 86.2% to 87.4% which is an improvement. 
+
+Moreover, on comparing the 2 models with a change in deviance test, we see that the p-value is low which implies that the addition of the new variable has improved the model. 
+ 

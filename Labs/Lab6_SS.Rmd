@@ -1,0 +1,336 @@
+---
+title: "Lab 6: Causal Inference"
+output: 
+  pdf_document
+author: "Srishti Saha (ss1078), Altamash Rafiq (ar327) and Ronald Nhondova (rtn6)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=7, fig.height=4, echo=FALSE, warning=FALSE, message=FALSE, fig.align = "center")
+```
+
+```{r}
+rm(list=ls())
+library(dplyr)
+library(ggplot2)
+library(cobalt)
+library(MatchIt)
+library(randomForest)
+library(tree)
+library(kableExtra)
+```
+
+## Question 1
+
+```{r}
+# Read in the data
+RHC <- read.table("rhc.txt",head=T)
+RHC <- RHC[,-which(names(RHC)=="surv2md1")]
+RHC$treatment = as.integer(as.logical(RHC$treatment))
+RHC$dth30 = as.integer(as.logical(RHC$dth30))
+```
+
+```{r}
+balance_check<-bal.tab(list(treat=as.factor(RHC$treatment),covs=RHC[,c(2:53)],estimand="ATT"))
+#balance_check
+```
+
+Using Absolute Standardized Difference (ASD) with an absolute value threshold of 0.1 as our metric for evaluating covariate balance, we found that many of the covariates are not balanced (have absolute standardized difference > 0.1). The covariates that are imbalanced are as follows:
+
+```{r}
+knitr::kable(
+balance_check$Balance[abs(balance_check$Balance['Diff.Un']) > 0.1,c('Type','Diff.Un')],
+format = 'latex',
+booktabs = T
+)%>%kable_styling(c("striped","condensed"),full_width = F, latex_options = "hold_position",font_size = 7)
+```
+
+
+## Question 2
+
+The estimated ATT of the patients with RHC = TRUE is 0.0755. This was obtained by subtracting the means of the predicted odds of death of the patients who originally received the treatment versus when the treatment flag was turned to FALSE for them (p0-p1).
+
+```{r}
+mod1= glm(dth30~.,data=RHC, family = binomial)
+#summary(mod1)
+```
+
+
+```{r eval=FALSE}
+n <- nrow(RHC)
+#step(glm(dth30~1,data=RHC,family=binomial),scope=formula(mod1),direction="both",
+     #trace=0,k = log(n))
+```
+
+
+```{r}
+mod2= glm(as.factor(dth30) ~ cat1+cat2+aps1+dnr1+bili1+age+treatment+scoma1+das2d3pc+hema+pafi1,data=RHC, family = binomial)
+#summary(mod2)
+```
+
+```{r}
+RHC_true<- RHC %>% subset(treatment==1)
+RHC_false<- RHC %>% subset(treatment==0)
+RHC_true_false<- RHC_true
+RHC_true_false$treatment<- 0
+true_preds=predict(mod2,type="response",newdata=RHC_true)
+false_preds= predict(mod2,type="response",newdata=RHC_true_false)
+```
+
+```{r}
+#mean(true_preds)-mean(false_preds)
+```
+
+## Question 3
+
+```{r}
+trteffct0 <- mean(RHC$dth30[RHC$treatment==1]) - 
+  mean(RHC$dth30[RHC$treatment==0])
+#trteffct0 #0.07364406
+
+#a problem with this estimator is that there is still imbalance in the treated and 
+#matched control covariate distributions!  So, we really shouldn't use it...
+#also, we did one-to-one matching and we don't have that much data left
+#we are only using 73*2=146 rows from the original data
+ 
+#but, if you wanted to do so, you can treat the data like two independent samples 
+#se would be 
+ntrue01<-length(RHC$dth30[RHC$treatment==1])
+nfalse01<-length(RHC$dth30[RHC$treatment==0])
+se <- sqrt(var(RHC$dth30[RHC$treatment==1])/ntrue01 + 
+            var(RHC$dth30[RHC$treatment==0])/nfalse01)
+
+#trteffct0 - 1.96*se #0.048
+#trteffct0 + 1.96*se #0.099
+```
+
+Based on our estimated effect, the treated patients might be better off with RHC. The decrease in chances of survival (or increase in chances of death) is 7.55%. We do not trust the conclusions because of the imbalance in data which is likely to skew the results. The confidence interval for the ATT is 0.048 to 0.099 i.e. (4.8% to 9.9%).
+
+## Question 4
+
+```{r out.width='50%'}
+mod3<- glm(treatment~.,data=RHC[,-which(names(RHC)=="dth30")], family = binomial)
+#summary(mod3)
+pscores<-predict(mod3,type="response")
+#head(pscores)
+#summary(pscores)
+```
+
+As per our histogram of the estimate propensity scores below, not many of the scores are near 1. As such, we are not going to remove any outliers based on this histogram.
+
+```{r}
+ggplot(RHC, aes(pscores)) +
+  geom_histogram(alpha=.6,fill=rainbow(10),bins=10)
+```
+
+Next, we made the following density plots to assess overlap and found that 103 observations are violating overlap. We decided to exclude these observations and discarded them.
+
+```{r out.width='50%'}
+RHC$pscore<- pscores
+#sum(RHC$pscore < max(min(RHC$pscore[RHC$treatment==0]),min(RHC$pscore[RHC$treatment==1]))) #94
+#sum(RHC$pscore > min(max(RHC$pscore[RHC$treatment==0]),max(RHC$pscore[RHC$treatment==1]))) #9
+
+ggplot(RHC, aes(x=pscores, fill=as.factor(treatment))) +
+  geom_density(alpha=.3) +
+  xlim(0, 1) + 
+  theme(legend.position = 'None')
+# combination exceeds 5
+```
+
+```{r}
+Index <- !(RHC$pscore < max(min(RHC$pscore[RHC$treatment==0]),min(RHC$pscore[RHC$treatment==1])) |
+             RHC$pscore > min(max(RHC$pscore[RHC$treatment==0]),max(RHC$pscore[RHC$treatment==1])))
+RHC_new <- RHC[Index,]
+
+```
+
+## Question 5
+
+```{r}
+#start with a main effects only regression
+#names(RHC)
+matchesRHC <- matchit(treatment ~ age + sex +race + edu+ income+ninsclas+  cat1+cat2+ resp+ card+neuro+gastr+ renal+ meta+hema+seps+trauma+ortho+     das2d3pc+ dnr1+ca+aps1+scoma1+wtkilo1+temp1+meanbp1+   resp1+hrt1+pafi1+paco21+    ph1+wblc1+     hema1+ sod1+     
+pot1+ crea1+bili1+alb1+cardiohx+ chfhx+dementhx+  psychhx+chrpulhx+  renalhx+liverhx+gibledhx+ malighx+   immunhx+   transhx+ amihx+wt0, method = "nearest", distance = "logit",data = RHC_new)
+#matchesRHC$match.matrix
+#extract the matched dataset
+RHCmatcheddata <- match.data(matchesRHC)
+```
+
+After conducting one-to-one matching we checked for covariance balance and found that the covariances are now balanced.
+
+```{r out.width='50%'}
+tab0<-summary(matchesRHC)
+ggplot(RHCmatcheddata, aes(y=distance, x=treatment, fill=as.factor(treatment))) +geom_boxplot() + 
+  theme(legend.position = 'None')
+```
+
+The covariates that are still not balanced are :-
+
+```{r}
+
+knitr::kable(
+tab0$reduction[tab0$reduction['Mean Diff.'] < 0 ,]['Mean Diff.'],
+format = 'latex',
+booktabs = T
+)%>%kable_styling(c("striped","condensed"),full_width = F, latex_options = "hold_position",font_size = 7)
+```
+
+## Question 6
+
+```{r}
+
+RHCmatcheddata$pred_death<- predict(mod2,newdata=RHCmatcheddata)
+
+
+trteffct <- mean(RHCmatcheddata$dth30[RHCmatcheddata$treatment==1]) - 
+  mean(RHCmatcheddata$dth30[RHCmatcheddata$treatment==0])
+#trteffct #0.07908046
+
+#a problem with this estimator is that there is still imbalance in the treated and 
+#matched control covariate distributions!  So, we really shouldn't use it...
+#also, we did one-to-one matching and we don't have that much data left
+#we are only using 73*2=146 rows from the original data
+ 
+#but, if you wanted to do so, you can treat the data like two independent samples 
+#se would be 
+ntrue1<-length(RHCmatcheddata$dth30[RHCmatcheddata$treatment==1])
+nfalse1<-length(RHCmatcheddata$dth30[RHCmatcheddata$treatment==0])
+se <- sqrt(var(RHCmatcheddata$dth30[RHCmatcheddata$treatment==1])/ntrue1 + 
+            var(RHCmatcheddata$dth30[RHCmatcheddata$treatment==0])/nfalse1)
+
+#using the normal approximation, confidence intervals would be
+#trteffct - 1.96*se #0.0510128
+#trteffct + 1.96*se #0.1071481
+
+
+#### answers
+#[1] 0.07908046
+#[1] 0.0510128
+#[1] 0.1071481
+#does not contain zero- this is enough evidence that the treatment effect is in fact different from zero
+```
+
+Treated patients are worse off with RHC as the effect is still high (significantly different from 0). The treatment effect is now reported to be 7.91% i.e. the odds of death at 30 days is now 7.91% higher given the treatment. The 95% confidence interval of this is 5.10% to 10.71%.
+
+## Question 7
+
+After estimating propensity score using random forest and assessed overlap (see the density plot below). We also determined that 13 observations violated the overlap and these observations were therefore dropped.
+
+```{r out.width='50%'}
+RHC_rf <- randomForest(as.factor(treatment) ~ age + sex +race + edu+ income+ninsclas+  cat1+cat2+ resp+ card+neuro+gastr+ renal+ meta+hema+seps+trauma+ortho+ das2d3pc+dnr1+ca+aps1+scoma1+wtkilo1+temp1+meanbp1+resp1+hrt1+pafi1+paco21+ph1+wblc1+hema1+ sod1+pot1+ crea1+bili1+alb1+cardiohx+ chfhx+dementhx+  psychhx+chrpulhx+  renalhx+liverhx+gibledhx+ malighx+   immunhx+   transhx+ amihx+wt0, data = RHC[,-which(names(RHC)=="dth30")], importance =TRUE,ntree=800)
+
+#saveRDS(RHC_rf,"RHC_rf.RDS")
+#RHC_rf<-readRDS("RHC_rf.RDS")
+rf_preds<-as.data.frame(predict(RHC_rf,type="prob"))
+names(rf_preds) <- c("pred0", "pred1")
+RHC$pscore_rf<-rf_preds$pred1
+#sum(RHC$pscore_rf < max(min(RHC$pscore_rf[RHC$treatment==0]),min(RHC$pscore_rf[RHC$treatment==1]))) #1
+#sum(RHC$pscore_rf > min(max(RHC$pscore_rf[RHC$treatment==0]),max(RHC$pscore_rf[RHC$treatment==1]))) #16
+
+ggplot(RHC, aes(x=pscore_rf, fill=as.factor(treatment))) +
+  geom_density(alpha=.3) +
+  xlim(0, 1) + 
+  theme(legend.position = 'None')
+```
+
+```{r}
+Index2 <- !(RHC$pscore_rf < max(min(RHC$pscore_rf[RHC$treatment==0]),min(RHC$pscore_rf[RHC$treatment==1])) |
+             RHC$pscore_rf > min(max(RHC$pscore_rf[RHC$treatment==0]),max(RHC$pscore_rf[RHC$treatment==1])))
+RHC_new2 <- RHC[Index2,]
+#13 observations dropped
+```
+
+## Question 8
+
+After doing one-to-one matching using the new propensity scores, we found that the covariates are more balanced now.
+
+```{r}
+matchesRHC2 <- matchit(treatment ~ age + sex +race + edu+ income+ninsclas+  cat1+cat2+ resp+ card+neuro+gastr+ renal+ meta+hema+seps+trauma+ortho+     das2d3pc+ dnr1+ca+aps1+scoma1+wtkilo1+temp1+meanbp1+   resp1+hrt1+pafi1+paco21+    ph1+wblc1+     hema1+ sod1+     
+pot1+ crea1+bili1+alb1+cardiohx+ chfhx+dementhx+  psychhx+chrpulhx+  renalhx+liverhx+gibledhx+ malighx+   immunhx+   transhx+ amihx+wt0, method = "nearest", distance = RHC_new2$pscore_rf,data = RHC_new2)
+#matchesRHC$match.matrix
+#summary(matchesRHC2)
+#extract the matched dataset
+RHCmatcheddata2 <- match.data(matchesRHC2)
+```
+
+
+```{r out.width='50%'}
+#summary(matchesRHC2)
+ggplot(RHCmatcheddata2, aes(y=distance, x=treatment, fill=as.factor(treatment))) +
+  geom_boxplot() + 
+  theme(legend.position = 'None')
+```
+
+The following covariates remain unbalanced :-
+
+```{r}
+tab3 <- summary(matchesRHC2)
+knitr::kable(
+tab3$reduction[tab3$reduction['Mean Diff.'] < 0 ,]['Mean Diff.'],
+format = 'latex',
+booktabs = T
+)%>%kable_styling(c("striped","condensed"),full_width = F, latex_options = "hold_position",font_size = 7)
+```
+
+## Question 9
+
+```{r}
+
+RHCmatcheddata2$pred_death<- predict(mod2,newdata=RHCmatcheddata2)
+
+
+trteffct <- mean(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==1]) - 
+  mean(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==0])
+#trteffct #0.0801474
+
+#a problem with this estimator is that there is still imbalance in the treated and 
+#matched control covariate distributions!  So, we really shouldn't use it...
+#also, we did one-to-one matching and we don't have that much data left
+#we are only using 73*2=146 rows from the original data
+ 
+#but, if you wanted to do so, you can treat the data like two independent samples 
+#se would be 
+ntrue2<-length(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==1])
+nfalse2<-length(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==0])
+se <- sqrt(var(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==1])/ntrue2 + 
+            var(RHCmatcheddata2$dth30[RHCmatcheddata2$treatment==0])/nfalse2)
+
+#using the normal approximation, confidence intervals would be
+#trteffct - 1.96*se #0.01898647
+#trteffct + 1.96*se #0.07585699
+
+
+###### answers
+#[1] 0.04742173
+#[1] 0.01898647
+#[1] 0.07585699
+#str(RHCmatcheddata2)
+#does not contain zero- this is enough evidence that the treatment effect is in fact different from zero
+```
+
+The 95% confidence interval now is 1.89% to 7.59%. The new ATT is __4.7%__, this means that the treatment increases the odds of death by 4.7% as compared to patients who are not treated.
+
+## Question 10
+
+```{r}
+input_final<- RHCmatcheddata2 %>% select(-distance, -weights, -pred_death)
+
+#str(input_final)
+#mod_final= glm(as.factor(dth30) ~ .,data=input_final, family = binomial)
+
+#saveRDS(mod_final,"final_model.RDS")
+
+###################### USE THIS #######################
+mod_final<-readRDS("final_model.RDS")
+#summary(mod_final)
+
+# pscores are significant
+#causal odds ratio due to pscores:  1.4234496
+#confint.default(mod_final)   #on log odds scale
+#exp(confint.default(mod_final))   #on odds scale
+```
+
+
+The logistic regression model coefficient for Treatment (level= Yes) is 0.3568. This means that given all other factors are constant and controlled for, a person who has received the treatment has 42.9% higher odds of death than the person who did not receive the treatment. This is in line with the observations in Q9 where we see that the effect of treatment on the odds of death is incremental.
+
